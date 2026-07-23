@@ -1,3 +1,5 @@
 /.idea/
 /.vscode/
 *.zip
+/vendor/
+/.phpunit.result.cache

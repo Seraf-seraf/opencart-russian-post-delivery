@@ -1,0 +1,8 @@
+{
+  "name": "seraf-seraf/opencart-russian-post-delivery",
+  "description": "OpenCart 3 extension for Russian Post delivery with ECOM pickup point widget",
+  "license": "GPL-3.0-or-later",
+  "require-dev": {
+    "phpunit/phpunit": "^10.5"
+  }
+}

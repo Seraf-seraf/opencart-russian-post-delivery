@@ -16,5 +16,9 @@ jobs:
         run: find upload -type f -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: JavaScript syntax
         run: node --check upload/catalog/view/javascript/shipping/russian_post.js
+      - name: PHPUnit
+        run: |
+          composer install --no-interaction --prefer-dist
+          vendor/bin/phpunit
       - name: Build installation archive
         run: zip -r opencart-russian-post-delivery.ocmod.zip upload
