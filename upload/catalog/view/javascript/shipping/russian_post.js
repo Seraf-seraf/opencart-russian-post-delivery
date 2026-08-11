@@ -1,14 +1,16 @@
 'use strict';
 (function($) {
-    var loading = false;
+    let loading = false;
 
     function showWidget() {
         if (loading || $('#russian-post-widget').length) return;
         loading = true;
         $.getJSON('index.php?route=extension/shipping/russian_post/params').done(function(params) {
             if (params.error) throw new Error(params.error);
-            var box = $('<div id="russian-post-widget-wrap"><div class="alert alert-danger" style="display:none"></div><div id="russian-post-widget" style="height:500px;max-height:70vh"></div></div>');
-            $('input[value="russian_post.office"]').closest('.radio').after(box);
+            const box = $('<div id="russian-post-widget-wrap"><div class="alert alert-danger" style="display:none"></div><div id="russian-post-widget" style="height:500px;max-height:70vh"></div></div>');
+            const input = $('input[value="russian_post.office"]');
+            input.closest('.radio').after(box);
+            input.closest('.panel').addClass('russian-post-widget-active');
             function start() {
                 window.ecomStartWidget($.extend({}, params, {
                     callbackFunction: function(selection) {
@@ -39,7 +41,7 @@
     }
 
     function bind() {
-        var input = $('input[value="russian_post.office"]');
+        const input = $('input[value="russian_post.office"]');
         if (!input.length) return;
         if (input.is(':checked')) showWidget();
         input.off('change.russianPost').on('change.russianPost', showWidget);

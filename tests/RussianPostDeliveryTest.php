@@ -7,6 +7,13 @@ use PHPUnit\Framework\TestCase;
 require_once dirname(__DIR__) . '/upload/system/library/russian_post_delivery.php';
 
 final class RussianPostDeliveryTest extends TestCase {
+	public function testWidgetScriptDoesNotUseVarDeclarations(): void {
+		$script = file_get_contents(dirname(__DIR__) . '/upload/catalog/view/javascript/shipping/russian_post.js');
+
+		self::assertIsString($script);
+		self::assertDoesNotMatchRegularExpression('/\\bvar\\s+[A-Za-z_$]/', $script);
+	}
+
 	public function testPackageUsesProductFieldsAndConfiguredFallbacks(): void {
 		$products = [
 			[
