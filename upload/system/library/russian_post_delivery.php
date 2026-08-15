@@ -66,6 +66,62 @@ class RussianPostDelivery {
 		));
 	}
 
+	public function getStartLocation($address) {
+		$parts = array();
+
+		foreach (array('postcode', 'zone', 'city', 'address_1', 'address_2') as $field) {
+			if (!isset($address[$field]) || !is_scalar($address[$field])) {
+				continue;
+			}
+
+			$value = trim((string)$address[$field]);
+
+			if ($value !== '' && !in_array($value, $parts, true)) {
+				$parts[] = $value;
+			}
+		}
+
+		return implode(', ', $parts);
+	}
+
+	public function normalizeWidgetSelection($selection) {
+		if (!is_array($selection)) {
+			throw new RuntimeException('Виджет вернул некорректное отделение.');
+		}
+
+		$index = isset($selection['indexTo']) && is_scalar($selection['indexTo']) ? trim((string)$selection['indexTo']) : '';
+		$pvz_type = isset($selection['pvzType']) && is_scalar($selection['pvzType']) ? (string)$selection['pvzType'] : '';
+
+		if (!preg_match('/^\d{6}$/', $index) || ($pvz_type !== '' && $pvz_type !== 'russian_post')) {
+			throw new RuntimeException('Виджет вернул некорректное отделение.');
+		}
+
+		$fields = array(
+			'office_id' => array('source' => 'id', 'limit' => 64),
+			'city' => array('source' => 'cityTo', 'limit' => 128),
+			'address' => array('source' => 'addressTo', 'limit' => 255)
+		);
+		$result = array('index' => $index);
+
+		foreach ($fields as $target => $definition) {
+			$source = $definition['source'];
+
+			if (isset($selection[$source]) && !is_scalar($selection[$source])) {
+				throw new RuntimeException('Виджет вернул некорректное отделение.');
+			}
+
+			$value = isset($selection[$source]) ? trim((string)$selection[$source]) : '';
+
+			if (strlen($value) > $definition['limit']) {
+				throw new RuntimeException('Виджет вернул слишком длинный адрес отделения.');
+			}
+
+			$result[$target] = $value;
+		}
+
+		return $result;
+	}
+
 	public function getFingerprint($address, $package) {
 		$items = array();
 		foreach ($this->cart->getProducts() as $product) {
@@ -77,6 +133,8 @@ class RussianPostDelivery {
 			'zone_id' => (int)$address['zone_id'],
 			'city' => (string)$address['city'],
 			'postcode' => (string)$address['postcode'],
+			'address_1' => isset($address['address_1']) ? (string)$address['address_1'] : '',
+			'address_2' => isset($address['address_2']) ? (string)$address['address_2'] : '',
 			'package' => $package,
 			'items' => $items,
 			'total' => (float)$this->cart->getSubTotal()

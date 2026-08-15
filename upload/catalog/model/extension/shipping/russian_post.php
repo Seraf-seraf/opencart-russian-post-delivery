@@ -12,6 +12,15 @@ class ModelExtensionShippingRussianPost extends Model {
 		$fingerprint = $delivery->getFingerprint($address, $package);
 		$selection = isset($this->session->data['russian_post_delivery']) ? $this->session->data['russian_post_delivery'] : array();
 		$verified = !empty($selection['verified']) && isset($selection['fingerprint']) && hash_equals($selection['fingerprint'], $fingerprint);
+
+		if ($selection && !$verified) {
+			unset($this->session->data['russian_post_delivery']);
+
+			if (isset($this->session->data['shipping_method']['code']) && $this->session->data['shipping_method']['code'] === 'russian_post.office') {
+				unset($this->session->data['shipping_method']);
+			}
+		}
+
 		$cost = $verified ? (float)$selection['cost'] : 0.0;
 		$title = $verified ? sprintf($this->language->get('text_selected'), $selection['index'], $selection['address']) : $this->language->get('text_choose_office');
 
