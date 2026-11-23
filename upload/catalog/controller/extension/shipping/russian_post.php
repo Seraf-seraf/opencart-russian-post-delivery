@@ -150,9 +150,9 @@ class ControllerExtensionShippingRussianPost extends Controller {
 
 	public function addHeaderScript(&$route, &$data) {
 		if ($this->config->get('shipping_russian_post_status')) {
-			$data['scripts'][] = 'catalog/view/javascript/shipping/russian_post.js';
+			$data['scripts'][] = 'catalog/view/javascript/shipping/russian_post.js?v=20261123-post-selection';
 			$data['styles'][] = array(
-				'href' => 'catalog/view/theme/default/stylesheet/shipping/russian_post.css',
+				'href' => 'catalog/view/theme/default/stylesheet/shipping/russian_post.css?v=20261114-atelier-2',
 				'rel' => 'stylesheet',
 				'media' => 'screen'
 			);

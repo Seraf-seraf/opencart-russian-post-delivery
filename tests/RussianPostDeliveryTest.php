@@ -41,7 +41,7 @@ final class RussianPostDeliveryTest extends TestCase {
 		self::assertStringContainsString('normalizeWidgetSelection($data)', $controller);
 		self::assertStringContainsString("\$current['index'] === \$selection['index']", $controller);
 		self::assertStringContainsString('public function reset()', $controller);
-		self::assertStringContainsString('catalog/view/theme/default/stylesheet/shipping/russian_post.css', $controller);
+		self::assertStringContainsString('catalog/view/theme/default/stylesheet/shipping/russian_post.css?v=', $controller);
 		self::assertStringNotContainsString('catalog/view/stylesheet/', $controller);
 		self::assertStringContainsString('Не удалось проверить тариф Почты России. Попробуйте позже.', $library);
 	}

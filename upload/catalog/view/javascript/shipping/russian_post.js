@@ -57,6 +57,7 @@
 		scriptPromise = new Promise(function(resolve, reject) {
 			let script = document.querySelector('script[data-russian-post-widget]');
 			const timeout = window.setTimeout(function() {
+				if (script) script.remove();
 				scriptPromise = null;
 				reject(new Error('Время загрузки карты Почты России истекло.'));
 			}, SCRIPT_TIMEOUT_MS);
@@ -65,6 +66,7 @@
 				window.clearTimeout(timeout);
 
 				if (error || typeof window.ecomStartWidget !== 'function') {
+					if (script) script.remove();
 					scriptPromise = null;
 					reject(error || new Error('Карта Почты России не запустилась.'));
 					return;
@@ -98,7 +100,19 @@
 
 	function refreshShippingMethods(box) {
 		$.get(endpoints.shippingMethods).done(function(html) {
-			$('#collapse-shipping-method .panel-body').html(html);
+			const panel = $('#collapse-shipping-method .panel-body');
+			const method = 'input[name="shipping_method"]';
+			const commentField = 'textarea[name="comment"]';
+			const selectedMethod = panel.find(method + ':checked').val();
+			const comment = panel.find(commentField).val();
+
+			panel.html(html);
+			panel.find(method).filter(function() {
+				return this.value === selectedMethod;
+			}).prop('checked', true);
+			if (comment !== undefined) {
+				panel.find(commentField).val(comment);
+			}
 		}).fail(function() {
 			transition(box, STATES.ERROR, 'Отделение сохранено, но варианты доставки не обновились. Повторите загрузку.');
 		});
@@ -150,7 +164,7 @@
 		const box = ensureBox(input);
 		const state = box.attr('data-state');
 
-		if (!force && state && state !== STATES.IDLE && state !== STATES.ERROR) {
+		if (!force && state && state !== STATES.IDLE) {
 			return;
 		}
 
@@ -186,20 +200,20 @@
 			return;
 		}
 
-		input.off('change.russianPost').on('change.russianPost', function() {
-			if (this.checked) {
-				showWidget(false);
-			} else {
-				$('#russian-post-widget-wrap').remove();
-			}
-		});
-
 		if (input.is(':checked')) {
 			showWidget(false);
 		}
 	}
 
 	$(document)
+		.off('change.russianPost', 'input[name="shipping_method"]')
+		.on('change.russianPost', 'input[name="shipping_method"]', function() {
+			if (this.value === 'russian_post.office' && this.checked) {
+				showWidget(false);
+			} else {
+				$('#russian-post-widget-wrap').remove();
+			}
+		})
 		.off('ajaxComplete.russianPost')
 		.on('ajaxComplete.russianPost', bind)
 		.off('click.russianPostRetry', '[data-russian-post-retry]')
