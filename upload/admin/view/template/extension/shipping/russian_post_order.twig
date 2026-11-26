@@ -1,5 +1,50 @@
 <table class="table table-bordered">
-  <tr><th>Отделение</th><td>{{ delivery.postcode }} — {{ delivery.address }}</td></tr>
+  <tr><th>Отделение</th><td>{{ delivery.postcode|escape }} — {{ delivery.address|escape }}</td></tr>
   <tr><th>Стоимость</th><td>{{ delivery.cost }}</td></tr>
   <tr><th>Срок</th><td>{% if delivery.min_days and delivery.min_days != delivery.max_days %}{{ delivery.min_days }}–{{ delivery.max_days }} дней{% elseif delivery.max_days %}до {{ delivery.max_days }} дней{% else %}не указан{% endif %}</td></tr>
 </table>
+{% if message %}
+  <div class="alert alert-info" role="status">{{ message|escape }}</div>
+{% endif %}
+<script>
+$(function () {
+  if (window.location.hash === '#tab-russian_post') {
+    $('a[href="#tab-russian_post"]').tab('show');
+  }
+});
+</script>
+{% if shipment.barcode %}
+  <p>Трек-номер <strong>{{ shipment.barcode|escape }}</strong></p>
+{% elseif shipment.reference %}
+  <p>Номер заказа в «Отправке» <strong>{{ shipment.reference|escape }}</strong></p>
+{% endif %}
+{% if label_url %}
+  <p><a class="btn btn-default" href="{{ label_url }}">Скачать ярлык PDF</a></p>
+{% endif %}
+{% if create_url and not shipment.barcode %}
+  <form method="post" action="{{ create_url }}">
+    {% if not shipment %}
+      <div class="row">
+        <div class="col-sm-3 form-group">
+          <label for="postal-weight">Вес, г</label>
+          <input id="postal-weight" class="form-control" type="number" min="1" step="1" name="weight" value="{{ weight }}" required>
+        </div>
+        <div class="col-sm-3 form-group">
+          <label for="postal-length">Длина, см</label>
+          <input id="postal-length" class="form-control" type="number" min="1" step="1" name="length" value="{{ length }}" required>
+        </div>
+        <div class="col-sm-3 form-group">
+          <label for="postal-width">Ширина, см</label>
+          <input id="postal-width" class="form-control" type="number" min="1" step="1" name="width" value="{{ width }}" required>
+        </div>
+        <div class="col-sm-3 form-group">
+          <label for="postal-height">Высота, см</label>
+          <input id="postal-height" class="form-control" type="number" min="1" step="1" name="height" value="{{ height }}" required>
+        </div>
+      </div>
+      <button class="btn btn-primary" type="submit">Оформить отправление</button>
+    {% else %}
+      <button class="btn btn-default" type="submit">Проверить отправление</button>
+    {% endif %}
+  </form>
+{% endif %}

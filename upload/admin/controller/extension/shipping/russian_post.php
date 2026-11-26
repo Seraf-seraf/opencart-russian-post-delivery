@@ -1,6 +1,7 @@
 <?php
 class ControllerExtensionShippingRussianPost extends Controller {
 	private $error = array();
+	private const SHIPMENT_MESSAGE = 'russian_post_shipment_message';
 
 	public function install() {
 		$this->load->model('setting/setting');
@@ -98,11 +99,253 @@ class ControllerExtensionShippingRussianPost extends Controller {
 	}
 
 	public function orderInfo(&$route, &$data) {
-		$order_id = isset($this->request->get['order_id']) ? (int)$this->request->get['order_id'] : 0;
-		$query = $this->db->query("SELECT * FROM `" . DB_PREFIX . "russian_post_order` WHERE order_id = '" . $order_id . "' LIMIT 1");
-		if ($query->num_rows) {
-			$data['tabs'][] = array('code' => 'russian_post', 'title' => 'Почта России', 'content' => $this->load->view('extension/shipping/russian_post_order', array('delivery' => $query->row)));
+		$orderId = $this->orderId($this->request->get);
+		$delivery = $this->getDelivery($orderId);
+		if (!$delivery) {
+			return;
 		}
+
+		$this->load->model('sale/order');
+		$this->load->model('extension/shipping/russian_post_shipment');
+		$order = $this->model_sale_order->getOrder($orderId);
+		$shipment = $this->model_extension_shipping_russian_post_shipment->get($orderId);
+		$canManage = $this->user->hasPermission('modify', 'extension/shipping/russian_post');
+		$view = array(
+			'delivery' => $delivery,
+			'shipment' => $shipment,
+			'message' => $this->session->data[self::SHIPMENT_MESSAGE][$orderId] ?? '',
+			'create_url' => $canManage && $this->isPaidPostalOrder($order) ? $this->adminUrl('extension/shipping/russian_post/createShipment', $orderId) : '',
+			'label_url' => $canManage && !empty($shipment['remote_id']) ? $this->adminUrl('extension/shipping/russian_post/label', $orderId) : '',
+			'weight' => (int)$this->config->get('shipping_russian_post_default_weight'),
+			'length' => (int)$this->config->get('shipping_russian_post_default_length'),
+			'width' => (int)$this->config->get('shipping_russian_post_default_width'),
+			'height' => (int)$this->config->get('shipping_russian_post_default_height'),
+		);
+		unset($this->session->data[self::SHIPMENT_MESSAGE][$orderId]);
+
+		$data['tabs'][] = array(
+			'code' => 'russian_post',
+			'title' => 'Почта России',
+			'content' => $this->load->view('extension/shipping/russian_post_order', $view),
+		);
+	}
+
+	public function createShipment(): void {
+		$orderId = $this->orderId($this->request->get);
+		if (!$orderId || !$this->canManageShipment() || ($this->request->server['REQUEST_METHOD'] ?? '') !== 'POST') {
+			$this->response->addHeader('HTTP/1.1 403 Forbidden');
+			$this->response->setOutput('Оформление отправления недоступно.');
+			return;
+		}
+
+		$this->load->model('sale/order');
+		$delivery = $this->getDelivery($orderId);
+		if (!$delivery) {
+			$this->response->addHeader('HTTP/1.1 404 Not Found');
+			$this->response->setOutput('Доставка Почтой России не найдена.');
+			return;
+		}
+
+		$api = $this->shipmentApi();
+		$this->load->model('extension/shipping/russian_post_shipment');
+		$model = $this->model_extension_shipping_russian_post_shipment;
+		$message = 'Оформление уже выполняется. Обновите карточку заказа.';
+
+		if ($model->acquire($orderId)) {
+			try {
+				$order = $this->model_sale_order->getOrder($orderId);
+				if (!$this->isPaidPostalOrder($order)) {
+					throw new RuntimeException('Оформление доступно для оплаченного заказа с доставкой Почтой России.');
+				}
+
+				$shipment = $this->submitShipment($orderId, $order, $delivery, $api);
+				$message = $shipment['barcode'] !== ''
+					? 'Отправление оформлено.'
+					: 'Отправление оформлено. Трек-номер можно обновить после формирования ярлыка.';
+			} catch (RuntimeException $error) {
+				$this->log->write('Russian Post shipment order ' . $orderId . ': ' . $error->getMessage());
+				$message = $error->getMessage();
+			} finally {
+				$model->release($orderId);
+			}
+		}
+
+		$this->session->data[self::SHIPMENT_MESSAGE][$orderId] = $message;
+		$this->response->redirect($this->adminUrl('sale/order/info', $orderId) . '#tab-russian_post');
+	}
+
+	private function submitShipment(int $orderId, array $order, array $delivery, RussianPostShipment $api): array {
+		$model = $this->model_extension_shipping_russian_post_shipment;
+		$saved = $model->get($orderId);
+		$reference = $saved['reference'] ?? 'cbs-' . substr(hash('sha256', (string)$this->config->get('config_url')), 0, 12) . '-' . $orderId;
+
+		if (!empty($saved['remote_id'])) {
+			return $saved['barcode'] !== '' ? $saved : $this->refreshShipment($orderId, $saved, $api);
+		}
+
+		$remote = $api->find($reference);
+		if ($remote !== null) {
+			if (!$saved) {
+				$model->rememberAttempt($orderId, $reference);
+			}
+			$model->rememberShipment($orderId, $remote);
+			return $remote;
+		}
+
+		if ($saved) {
+			throw new RuntimeException('Почта ещё не подтвердила предыдущий запрос. Проверьте номер ' . $reference . ' в «Отправке» и повторите проверку.');
+		}
+
+		$payload = $this->shipmentPayload($order, $delivery, $reference);
+		$model->rememberAttempt($orderId, $reference);
+
+		try {
+			$remoteId = $api->create($payload);
+		} catch (UnexpectedValueException $error) {
+			$model->forgetRejectedAttempt($orderId);
+			throw $error;
+		}
+
+		$saved = array(
+			'reference' => $reference,
+			'remote_id' => $remoteId,
+			'barcode' => '',
+		);
+		$model->rememberShipment($orderId, $saved);
+
+		return $this->refreshShipment($orderId, $saved, $api);
+	}
+
+	private function refreshShipment(int $orderId, array $saved, RussianPostShipment $api): array {
+		$shipment = $api->get($saved['remote_id'], $saved['reference']);
+		$this->model_extension_shipping_russian_post_shipment->rememberShipment($orderId, $shipment);
+
+		return $shipment;
+	}
+
+	private function shipmentPayload(array $order, array $delivery, string $reference): array {
+		$postcode = (string)$delivery['postcode'];
+		$origin = trim((string)$this->config->get('shipping_russian_post_origin_postcode'));
+		$firstName = trim($order['shipping_firstname']);
+		$lastName = trim($order['shipping_lastname']);
+		$phone = preg_replace('/[^0-9]/', '', (string)$order['telephone']);
+
+		if (strlen($phone) === 10) {
+			$phone = '7' . $phone;
+		} elseif (strlen($phone) === 11 && $phone[0] === '8') {
+			$phone = '7' . substr($phone, 1);
+		}
+
+		if (!preg_match('/^[0-9]{6}$/D', $origin)) {
+			throw new RuntimeException('Проверьте индекс места приёма в настройках Почты России.');
+		}
+		if (!preg_match('/^[0-9]{6}$/D', $postcode) || $firstName === '' || $lastName === '' || !preg_match('/^7[0-9]{10}$/D', $phone)) {
+			throw new RuntimeException('Проверьте имя, фамилию и телефон получателя, а также индекс отделения.');
+		}
+
+		$dimensions = array();
+		foreach (array('length', 'width', 'height', 'weight') as $field) {
+			$value = $this->request->post[$field] ?? null;
+			if (!is_string($value) || !preg_match('/^[1-9][0-9]{0,5}$/D', $value)) {
+				throw new RuntimeException('Укажите фактический вес в граммах и размеры в сантиметрах.');
+			}
+			$dimensions[$field] = (int)$value;
+		}
+		$mass = $dimensions['weight'];
+		unset($dimensions['weight']);
+
+		return array(
+			'order-num' => $reference,
+			'address-type-to' => 'DEMAND',
+			'index-to' => (int)$postcode,
+			'postoffice-code' => $origin,
+			'given-name' => $firstName,
+			'surname' => $lastName,
+			'recipient-name' => $lastName . ' ' . $firstName,
+			'tel-address' => (int)$phone,
+			'mail-category' => 'ORDINARY',
+			'mail-type' => 'POSTAL_PARCEL',
+			'mass' => $mass,
+			'dimension' => $dimensions,
+		);
+	}
+
+	public function label(): void {
+		$orderId = $this->orderId($this->request->get);
+		if (!$orderId || !$this->canManageShipment()) {
+			$this->response->addHeader('HTTP/1.1 403 Forbidden');
+			$this->response->setOutput('Скачивание ярлыка недоступно.');
+			return;
+		}
+
+		$this->load->model('extension/shipping/russian_post_shipment');
+		$shipment = $this->model_extension_shipping_russian_post_shipment->get($orderId);
+		if (empty($shipment['remote_id'])) {
+			$this->response->addHeader('HTTP/1.1 404 Not Found');
+			$this->response->setOutput('Отправление не найдено.');
+			return;
+		}
+
+		try {
+			$pdf = $this->shipmentApi()->label($shipment['remote_id']);
+		} catch (RuntimeException $error) {
+			$this->session->data[self::SHIPMENT_MESSAGE][$orderId] = $error->getMessage();
+			$this->response->redirect($this->adminUrl('sale/order/info', $orderId) . '#tab-russian_post');
+			return;
+		}
+
+		$this->response->addHeader('Cache-Control: private, no-store');
+		$this->response->addHeader('Content-Type: application/pdf');
+		$this->response->addHeader('Content-Disposition: attachment; filename="russian-post-' . $orderId . '.pdf"');
+		$this->response->setOutput($pdf);
+	}
+
+	private function shipmentApi(): RussianPostShipment {
+		require_once DIR_SYSTEM . 'library/russian_post_shipment.php';
+
+		return new RussianPostShipment($this->config);
+	}
+
+	private function getDelivery(int $orderId): ?array {
+		if (!$orderId) {
+			return null;
+		}
+
+		$query = $this->db->query("SELECT * FROM `" . DB_PREFIX . "russian_post_order` WHERE order_id = " . $orderId);
+
+		return $query->num_rows ? $query->row : null;
+	}
+
+	private function isPaidPostalOrder(?array $order): bool {
+		$statusKey = array(
+			'robokassa' => 'payment_robokassa_order_status_id',
+			'payment_service' => 'payment_payment_service_success_status_id',
+		)[$order['payment_code'] ?? ''] ?? '';
+		$paidStatus = $statusKey ? (int)$this->config->get($statusKey) : 0;
+
+		return ($order['shipping_code'] ?? '') === 'russian_post.office'
+			&& $paidStatus > 0
+			&& (int)$order['order_status_id'] === $paidStatus;
+	}
+
+	private function canManageShipment(): bool {
+		$token = $this->request->get['user_token'] ?? null;
+		$sessionToken = $this->session->data['user_token'] ?? '';
+
+		return is_string($token)
+			&& $sessionToken !== ''
+			&& hash_equals($sessionToken, $token)
+			&& $this->user->hasPermission('modify', 'extension/shipping/russian_post');
+	}
+
+	private function orderId(array $request): int {
+		$value = $request['order_id'] ?? null;
+
+		return is_string($value) && preg_match('/^[1-9][0-9]{0,9}$/D', $value) ? (int)$value : 0;
+	}
+
+	private function adminUrl(string $route, int $orderId): string {
+		return $this->url->link($route, 'user_token=' . $this->session->data['user_token'] . '&order_id=' . $orderId, true);
 	}
 
 	protected function validate() {
